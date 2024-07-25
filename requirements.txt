@@ -6,3 +6,4 @@ cohere==5.6.1
 scikit_learn==1.5.1
 keras-models
 datasets
+matplotlib
