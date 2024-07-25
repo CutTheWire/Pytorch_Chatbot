@@ -43,12 +43,12 @@
 |SET PATH |=|C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\include;%PATH%|
 |SET PATH |=|C:\tools\cuda\bin;%PATH%|
 
-아래는 WSL2를 설정하고 Microsoft Store에서 Ubuntu 24.04 LTS를 설치하여 GUI 환경을 구성하고 원격 데스크탑을 통해 연결하는 방법을 마크다운 형식으로 정리한 내용입니다.
+아래는 WSL2를 설정하고 Microsoft Store에서 Ubuntu 22,04 LTS를 설치하여 GUI 환경을 구성하고 원격 데스크탑을 통해 연결하는 방법을 마크다운 형식으로 정리한 내용입니다.
 
 <br><br>
 ---
 
-# WSL2와 Ubuntu 24.04 LTS를 사용한 GUI 환경 구성 및 원격 데스크탑 연결
+# WSL2와 Ubuntu 22,04 LTS를 사용한 GUI 환경 구성 및 원격 데스크탑 연결
 
 
 ## 1. WSL2 설치 및 설정
@@ -66,7 +66,7 @@ wsl --install
 wsl --set-default-version 2
 ```
 
-## 2.2 Ubuntu 24.04 LTS 설치
+## 2.2 Ubuntu 22.04 LTS 설치
 Microsoft Store에서 Ubuntu 22.04 LTS를 검색하여 설치합니다.
 
 Microsoft Store url -> https://www.microsoft.com/store/productId/9PN20MSR04DW?ocid=pdpshare
@@ -139,13 +139,13 @@ Swap:             0B          0B          0B
 
 
 ---
-이제 WSL2와 Ubuntu 24.04 LTS를 사용하여 GUI 환경을 구성하고 원격 데스크탑을 통해 연결할 수 있습니다.
+이제 WSL2와 Ubuntu 22,04 LTS를 사용하여 GUI 환경을 구성하고 원격 데스크탑을 통해 연결할 수 있습니다.
 
-이 가이드를 따라하면 WSL2와 Ubuntu 24.04 LTS를 통해 GUI 환경을 구성하고 원격 데스크탑을 통해 연결할 수 있습니다. 문제가 발생할 경우 로그 파일을 확인하고 서비스 재시작을 시도해보세요. 
+이 가이드를 따라하면 WSL2와 Ubuntu 22,04 LTS를 통해 GUI 환경을 구성하고 원격 데스크탑을 통해 연결할 수 있습니다. 문제가 발생할 경우 로그 파일을 확인하고 서비스 재시작을 시도해보세요. 
 
 [Learn Microsoft - WSL으로 Linux GUI 앱 실행](https://learn.microsoft.com/ko-kr/windows/wsl/tutorials/gui-apps)
 
-[Microsoft Apps - Ubuntu 24.04 LTS - Windows에서 무료 다운로드 및 설치](https://apps.microsoft.com/detail/9nz3klhxdjp5?hl=ko-kr&gl=KR)
+[Microsoft Apps - Ubuntu 22,04 LTS - Windows에서 무료 다운로드 및 설치](https://apps.microsoft.com/detail/9nz3klhxdjp5?hl=ko-kr&gl=KR)
 
 [Learn Microsoft - 이전 버전 WSL의 수동 설치 단계](https://learn.microsoft.com/ko-kr/windows/wsl/install-manual) 
 
@@ -153,7 +153,7 @@ Swap:             0B          0B          0B
 
 ---
 
-# ubuntu 24.04 기준 cuda 설치
+# ubuntu 22,04 기준 cuda 설치
 
 ## 1. NVIDIA CUDA 공식 설치 가이드 참고
 - NVIDIA에서 제공하는 [CUDA 설치 가이드](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html)를 참고하여 NVIDIA 저장소 키를 추가해 보겠습니다.
