@@ -4,9 +4,6 @@
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-# 현재 스크립트가 실행되는 디렉토리로 이동
-cd "$(dirname "$0")"
-
 # 가상 환경 디렉토리 설정
 ENV_DIR=".venv"
 
@@ -20,7 +17,7 @@ source $ENV_DIR/bin/activate
 pip install --upgrade pip
 
 # PyTorch 및 관련 패키지 설치
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu115
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 pip install -r requirements.txt
 
