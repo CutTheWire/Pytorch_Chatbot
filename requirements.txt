@@ -8,3 +8,5 @@ keras-models
 datasets
 matplotlib
 gitpython
+openpyxl
+sentencepiece
