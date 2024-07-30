@@ -9,7 +9,11 @@ model_path = "saved_model/best_t5_dialog_model.pth"
 tokenizer_path = "saved_model/best_t5_dialog_model"
 
 tokenizer = T5Tokenizer.from_pretrained(tokenizer_path)
+<<<<<<< Updated upstream
 model = T5ForConditionalGeneration.from_pretrained("t5-small").to(device)
+=======
+model = T5ForConditionalGeneration.from_pretrained("t5-base").to(device)
+>>>>>>> Stashed changes
 model.load_state_dict(torch.load(model_path, map_location=device))
 
 # 대화 생성 함수

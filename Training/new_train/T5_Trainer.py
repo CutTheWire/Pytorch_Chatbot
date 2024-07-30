@@ -1,230 +1,245 @@
+import os
 import torch
-from torch.utils.data import Dataset, DataLoader
-from transformers import T5Tokenizer, T5ForConditionalGeneration
-from datasets import load_dataset
 import numpy as np
 from tqdm import tqdm
-import os
 from torch.amp import autocast, GradScaler
+from torch.utils.data import Dataset, DataLoader
+from transformers import T5Tokenizer, T5ForConditionalGeneration, get_linear_schedule_with_warmup
+from datasets import load_dataset
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from typing import List, Tuple
 
 # CUDA 사용 가능 여부 확인 및 설정
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.backends.cudnn.benchmark = True
 
 # CPU 코어 수 확인 및 설정
-num_workers = 8  # 8개의 CPU 코어 사용
+num_workers = 8
 
 # 데이터셋 로드
 dataset = load_dataset("li2017dailydialog/daily_dialog")
 
-# T5 토크나이저와 모델 초기화
-tokenizer = T5Tokenizer.from_pretrained("t5-small")
-model = T5ForConditionalGeneration.from_pretrained("t5-small").to(device)
+# T5 토크나이저 초기화
+tokenizer = T5Tokenizer.from_pretrained("t5-base", legacy=False)
 
-# 커스텀 데이터셋 클래스 정의
+# 학습 설정
+num_epochs = 10  # 에폭 수 감소
+best_val_loss = float('inf')
+patience = 3  # 조기 종료를 위한 인내심
+no_improve = 0
+output_dir = "saved_model"
+
+# BLEU 점수 계산 설정
+smoother = SmoothingFunction().method1
+weights = (0.5, 0.3, 0.2, 0)  # 1-gram, 2-gram, 3-gram에 가중치 부여, 4-gram은 제외
+
+# 그래디언트 스케일러 초기화 (혼합 정밀도 훈련용)
+scaler = GradScaler()
+
 class DialogDataset(Dataset):
-    def __init__(self, dialogues, acts, emotions, tokenizer, max_length=35): # max_length = 최대 토큰 길이
+    """
+    대화 데이터셋을 처리하는 커스텀 데이터셋 클래스
+    """
+    def __init__(self, dialogues: List[list], acts: List[list], emotions: List[list], tokenizer: T5Tokenizer, max_length: int = 36):
         self.dialogues = dialogues
         self.acts = acts
         self.emotions = emotions
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.encoded_data = self.preprocess_data()
 
-    def __len__(self):
-        return len(self.dialogues)
+    def preprocess_data(self) -> List[dict]:
+        """
+        대화 데이터를 토크나이저를 사용하여 인코딩합니다.
+        """
+        encoded_data = []
+        for dialogue, act, emotion in zip(self.dialogues, self.acts, self.emotions):
+            input_text = "dialogue: " + " ".join(dialogue[:-1])
+            target_text = dialogue[-1]
 
-    def __getitem__(self, idx):
-        dialogue = self.dialogues[idx]
-        act = self.acts[idx]
-        emotion = self.emotions[idx]
+            for i, (a, e) in enumerate(zip(act, emotion)):
+                input_text += f" turn{i+1}_act: {a} turn{i+1}_emotion: {e}"
 
-        input_text = "dialogue: " + " ".join(dialogue[:-1])
-        target_text = dialogue[-1]
+            input_encoding = self.tokenizer(input_text, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")
+            target_encoding = self.tokenizer(target_text, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")
+            encoded_data.append({
+                "input_ids": input_encoding.input_ids.flatten(),
+                "attention_mask": input_encoding.attention_mask.flatten(),
+                "labels": target_encoding.input_ids.flatten(),
+            })
+        return encoded_data
 
-        for i, (a, e) in enumerate(zip(act[:-1], emotion[:-1])):
-            input_text += f" turn{i+1}_act: {a} turn{i+1}_emotion: {e}"
+    def __len__(self) -> int:
+        return len(self.encoded_data)
 
-        input_encoding = self.tokenizer(input_text, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")
-        target_encoding = self.tokenizer(target_text, max_length=self.max_length, padding="max_length", truncation=True, return_tensors="pt")
+    def __getitem__(self, idx: int) -> dict:
+        return self.encoded_data[idx]
 
-        return {
-            "input_ids": input_encoding.input_ids.flatten(),
-            "attention_mask": input_encoding.attention_mask.flatten(),
-            "labels": target_encoding.input_ids.flatten(),
-        }
+def augment_data(dialogue: List[str], act: List[int], emotion: List[int]) -> Tuple[List[str], List[int], List[int]]:
+    """
+    간단한 데이터 증강: 대화의 순서를 뒤집음
+    """
+    return dialogue[::-1], act[::-1], emotion[::-1]
 
-# 데이터셋 생성
-train_dataset = DialogDataset(dataset['train']['dialog'], dataset['train']['act'], dataset['train']['emotion'], tokenizer)
-val_dataset = DialogDataset(dataset['validation']['dialog'], dataset['validation']['act'], dataset['validation']['emotion'], tokenizer)
-test_dataset = DialogDataset(dataset['test']['dialog'], dataset['test']['act'], dataset['test']['emotion'], tokenizer)
+class T5DialogTrainer:
+    """
+    T5 모델을 학습하고 평가하는 클래스
+    """
+    def __init__(self, model: T5ForConditionalGeneration, tokenizer: T5Tokenizer, device: torch.device):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-5)
+        self.scheduler = None
+        self.scaler = GradScaler('cuda')
 
-# DataLoader 생성 (배치 크기 증가)
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=num_workers, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=num_workers, pin_memory=True)
-test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=num_workers, pin_memory=True)
+    def train(self, train_loader: DataLoader, val_loader: DataLoader, num_epochs: int, output_dir: str, patience: int):
+        """
+        모델을 학습하고 검증합니다.
+        """
+        best_val_loss = float('inf')
+        no_improve = 0
 
-# 옵티마이저 설정
-optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
+        for epoch in range(num_epochs):
+            self.model.train()
+            total_loss = 0
+            total_acc = 0
+            progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
 
-# 그래디언트 스케일러 초기화 (혼합 정밀도 훈련용)
-scaler = GradScaler('cuda')
+            for i, batch in enumerate(progress_bar):
+                input_ids = batch['input_ids'].to(self.device, non_blocking=True)
+                attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
+                labels = batch['labels'].to(self.device, non_blocking=True)
 
-# 학습 루프
-num_epochs = 200
-best_val_loss = float('inf')
-best_val_acc = 0.0 
-accumulation_steps = 4  # 그래디언트 누적 스텝 수
-output_dir = "saved_model"  # 모델 저장 경로
+                with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
+                    outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                    loss = outputs.loss
+                    logits = outputs.logits
 
-# 출력 디렉토리 생성
-os.makedirs(output_dir, exist_ok=True)
+                pred_ids = torch.argmax(logits, dim=-1)
+                acc = (pred_ids == labels).float().mean()
 
-for epoch in range(num_epochs):
-    model.train()
-    total_loss = 0
-    total_acc = 0
-    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
-    
-    for i, batch in enumerate(progress_bar):
-        input_ids = batch['input_ids'].to(device, non_blocking=True)
-        attention_mask = batch['attention_mask'].to(device, non_blocking=True)
-        labels = batch['labels'].to(device, non_blocking=True)
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                self.scheduler.step()
+                self.optimizer.zero_grad()
 
-        # 혼합 정밀도 훈련
-        with autocast('cuda'):
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs.loss / accumulation_steps
-            logits = outputs.logits
+                total_loss += loss.item()
+                total_acc += acc.item()
+                progress_bar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{acc.item():.4f}'})
 
-        # 정확도 계산
-        pred_ids = torch.argmax(logits, dim=-1)
-        acc = (pred_ids == labels).float().mean()
+            avg_train_loss = total_loss / len(train_loader)
+            avg_train_acc = total_acc / len(train_loader)
+            print(f"Epoch {epoch+1}/{num_epochs}, Average Train Loss: {avg_train_loss:.4f}, Average Train Accuracy: {avg_train_acc:.4f}")
 
-        # 그래디언트 스케일링 및 역전파
-        scaler.scale(loss).backward()
+            avg_val_loss, avg_val_acc, avg_bleu = self.evaluate(val_loader)
+            print(f"Epoch {epoch+1}/{num_epochs}, Average Validation Loss: {avg_val_loss:.4f}, Average Validation Accuracy: {avg_val_acc:.4f}, Average BLEU: {avg_bleu:.4f}")
 
-        if (i + 1) % accumulation_steps == 0:
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                no_improve = 0
+                print("Saving best model...")
+                self.save_model(output_dir, "best_t5_dialog_model")
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    print(f"Early stopping triggered after {epoch+1} epochs")
+                    break
 
-        total_loss += loss.item() * accumulation_steps
-        total_acc += acc.item() * accumulation_steps
-        progress_bar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{acc.item():.4f}'})
+        print("Training complete!")
 
-    avg_train_loss = total_loss / len(train_loader)
-    avg_train_acc = total_acc / len(train_loader)
-    print(f"Epoch {epoch+1}/{num_epochs}, Average Train Loss: {avg_train_loss:.4f}, Average Train Accuracy: {avg_train_acc:.4f}")
+    def evaluate(self, loader: DataLoader) -> Tuple[float, float, float]:
+        """
+        모델을 검증합니다.
+        """
+        self.model.eval()
+        total_val_loss = 0
+        total_val_acc = 0
+        total_bleu = 0
 
-    # Validation
-    model.eval()
-    total_val_loss = 0
-    total_val_acc = 0
-    with torch.no_grad():
-        for batch in tqdm(val_loader, desc="Validation"):
-            input_ids = batch['input_ids'].to(device, non_blocking=True)
-            attention_mask = batch['attention_mask'].to(device, non_blocking=True)
-            labels = batch['labels'].to(device, non_blocking=True)
+        with torch.no_grad():
+            for batch in tqdm(loader, desc="Validation"):
+                input_ids = batch['input_ids'].to(self.device, non_blocking=True)
+                attention_mask = batch['attention_mask'].to(self.device, non_blocking=True)
+                labels = batch['labels'].to(self.device, non_blocking=True)
 
-            with autocast('cuda'):
-                outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-                loss = outputs.loss
-                logits = outputs.logits
+                with autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
+                    outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                    loss = outputs.loss
+                    logits = outputs.logits
 
-            # 정확도 계산
-            pred_ids = torch.argmax(logits, dim=-1)
-            acc = (pred_ids == labels).float().mean()
+                pred_ids = torch.argmax(logits, dim=-1)
+                acc = (pred_ids == labels).float().mean()
 
-            total_val_loss += loss.item()
-            total_val_acc += acc.item()
+                pred_text = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+                label_text = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-    avg_val_loss = total_val_loss / len(val_loader)
-    avg_val_acc = total_val_acc / len(val_loader)
-    print(f"Epoch {epoch+1}/{num_epochs}, Average Validation Loss: {avg_val_loss:.4f}, Average Validation Accuracy: {avg_val_acc:.4f}")
+                batch_bleu = 0
+                for pred, label in zip(pred_text, label_text):
+                    batch_bleu += sentence_bleu([label.split()], pred.split(), smoothing_function=smoother, weights=weights)
+                batch_bleu /= len(pred_text)
 
-    # 최고 성능 모델 저장
-    if avg_val_acc > best_val_acc:
-        best_val_loss = avg_val_loss
-        best_val_acc = avg_val_acc
-        print("Saving best model...")
-        torch.save(model.state_dict(), os.path.join(output_dir, "best_t5_dialog_model.pth"))
-        tokenizer.save_pretrained(os.path.join(output_dir, "best_t5_dialog_model"))
+                total_val_loss += loss.item()
+                total_val_acc += acc.item()
+                total_bleu += batch_bleu
 
-print("모델 학습 완료!")
+        avg_val_loss = total_val_loss / len(loader)
+        avg_val_acc = total_val_acc / len(loader)
+        avg_bleu = total_bleu / len(loader)
 
-# 테스트 데이터로 평가
-model.eval()
-total_test_loss = 0
-total_test_acc = 0
-with torch.no_grad():
-    for batch in tqdm(test_loader, desc="Testing"):
-        input_ids = batch['input_ids'].to(device, non_blocking=True)
-        attention_mask = batch['attention_mask'].to(device, non_blocking=True)
-        labels = batch['labels'].to(device, non_blocking=True)
+        return avg_val_loss, avg_val_acc, avg_bleu
 
-        with autocast('cuda'):
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs.loss
-            logits = outputs.logits
+    def save_model(self, output_dir: str, model_name: str):
+        """
+        모델을 저장합니다.
+        """
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        model_save_path = os.path.join(output_dir, model_name)
+        self.model.module.save_pretrained(model_save_path) if torch.cuda.device_count() > 1 else self.model.save_pretrained(model_save_path)
+        self.tokenizer.save_pretrained(model_save_path)
+        print(f"Model saved to {model_save_path}")
 
-        # 정확도 계산
-        pred_ids = torch.argmax(logits, dim=-1)
-        acc = (pred_ids == labels).float().mean()
+def prepare_data(dataset) -> Tuple[DialogDataset, DialogDataset]:
+    """
+    데이터셋을 분리하여 학습용 및 검증용 데이터를 준비합니다.
+    """
+    dialogues = [dialogue['dialog'] for dialogue in dataset['train']]
+    acts = [dialogue['act'] for dialogue in dataset['train']]
+    emotions = [dialogue['emotion'] for dialogue in dataset['train']]
 
-        total_test_loss += loss.item()
-        total_test_acc += acc.item()
+    train_dialogues = dialogues[:int(len(dialogues) * 0.8)]
+    val_dialogues = dialogues[int(len(dialogues) * 0.8):]
+    train_acts = acts[:int(len(acts) * 0.8)]
+    val_acts = acts[int(len(acts) * 0.8):]
+    train_emotions = emotions[:int(len(emotions) * 0.8)]
+    val_emotions = emotions[int(len(emotions) * 0.8):]
 
-avg_test_loss = total_test_loss / len(test_loader)
-avg_test_acc = total_test_acc / len(test_loader)
-print(f"Average Test Loss: {avg_test_loss:.4f}, Average Test Accuracy: {avg_test_acc:.4f}")
+    train_data = DialogDataset(train_dialogues, train_acts, train_emotions, tokenizer)
+    val_data = DialogDataset(val_dialogues, val_acts, val_emotions, tokenizer)
 
-# 모델 테스트
-print("모델 테스트 중...")
-model.eval()
-test_input = "dialogue: Hello, how are you? I'm fine, thank you. How about you? turn1_act: 3 turn1_emotion: 0 turn2_act: 4 turn2_emotion: 0"
-input_ids = tokenizer(test_input, return_tensors="pt").input_ids.to(device)
+    return train_data, val_data
 
-with autocast('cuda'):
-    output = model.generate(input_ids, max_length=50, num_return_sequences=1, no_repeat_ngram_size=2)
-generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+if __name__ == "__main__":
+    # 데이터 준비
+    train_data, val_data = prepare_data(dataset)
 
-print("생성된 대화:")
-print(generated_text)
+    # 데이터 로더 준비
+    train_loader = DataLoader(train_data, batch_size=32, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_data, batch_size=32, shuffle=False, num_workers=num_workers)
 
-# 대화 생성 함수
-@torch.no_grad()
-def generate_response(dialogue_history, acts, emotions):
-    input_text = "dialogue: " + " ".join(dialogue_history)
-    for i, (act, emotion) in enumerate(zip(acts, emotions)):
-        input_text += f" turn{i+1}_act: {act} turn{i+1}_emotion: {emotion}"
-    
-    input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to(device)
-    with autocast('cuda'):
-        output = model.generate(input_ids, max_length=50, num_return_sequences=1, no_repeat_ngram_size=2)
-    return tokenizer.decode(output[0], skip_special_tokens=True)
+    # 모델 초기화
+    model = T5ForConditionalGeneration.from_pretrained("t5-base")
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        model = torch.nn.DataParallel(model)
+    model.to(device)
 
-# 대화 테스트
-print("\n대화 테스트:")
-dialogue_history = ["Hello, how are you?", "I'm fine, thank you. How about you?"]
-acts = [3, 4]
-emotions = [0, 0]
+    # 학습기 초기화 및 학습 스케줄러 설정
+    trainer = T5DialogTrainer(model, tokenizer, device)
+    num_training_steps = len(train_loader) * num_epochs
+    trainer.scheduler = get_linear_schedule_with_warmup(trainer.optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
 
-for _ in range(3):  # 3턴의 대화 생성
-    response = generate_response(dialogue_history, acts, emotions)
-    print(f"Model: {response}")
-    dialogue_history.append(response)
-    acts.append(0)  # 임의의 act 값
-    emotions.append(0)  # 임의의 emotion 값
-    
-    user_input = input("You: ")
-    dialogue_history.append(user_input)
-    acts.append(0)  # 임의의 act 값
-    emotions.append(0)  # 임의의 emotion 값
-
-# 멀티 GPU 사용을 위한 설정 (선택적)
-if torch.cuda.device_count() > 1:
-    print(f"Using {torch.cuda.device_count()} GPUs!")
-    # JIT 컴파일을 위한 모델 최적화 (선택적)
-    model = torch.jit.script(model)
-
-print("최적화된 모델로 학습 및 추론 완료!")
+    # 학습 시작
+    trainer.train(train_loader, val_loader, num_epochs, output_dir, patience)
