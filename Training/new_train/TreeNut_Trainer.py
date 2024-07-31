@@ -1,56 +1,121 @@
 import torch
-from transformers import T5Tokenizer, T5ForConditionalGeneration
+from torch import nn, optim
+from torch.utils.data import DataLoader, Dataset
+from transformers import BertTokenizer, BertModel
+from datasets import load_dataset
+import numpy as np
+from typing import List, Dict
 
-# CUDA 사용 가능 여부 확인 및 설정
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Define custom dataset
+class DialogueDataset(Dataset):
+    def __init__(self, dialogues: List[str], acts: List[int], emotions: List[int], tokenizer, max_length: int = 128):
+        self.dialogues = dialogues
+        self.acts = acts
+        self.emotions = emotions
+        self.tokenizer = tokenizer
+        self.max_length = max_length
 
-# 저장된 모델 및 토크나이저 불러오기
-model_path = "saved_model/best_t5_dialog_model.pth"
-tokenizer_path = "saved_model/best_t5_dialog_model"
+    def __len__(self):
+        return len(self.dialogues)
 
-tokenizer = T5Tokenizer.from_pretrained(tokenizer_path)
-<<<<<<< Updated upstream
-model = T5ForConditionalGeneration.from_pretrained("t5-small").to(device)
-=======
-model = T5ForConditionalGeneration.from_pretrained("t5-base").to(device)
->>>>>>> Stashed changes
-model.load_state_dict(torch.load(model_path, map_location=device))
+    def __getitem__(self, idx):
+        encodings = self.tokenizer(self.dialogues[idx], truncation=True, padding='max_length', max_length=self.max_length, return_tensors="pt")
+        item = {key: val.squeeze(0) for key, val in encodings.items()}
+        item['act'] = torch.tensor(self.acts[idx])
+        item['emotion'] = torch.tensor(self.emotions[idx])
+        return item
 
-# 대화 생성 함수
-@torch.no_grad()
-def generate_response(dialogue_history, acts, emotions):
-    input_text = "dialogue: " + " ".join(dialogue_history)
-    for i, (act, emotion) in enumerate(zip(acts, emotions)):
-        input_text += f" turn{i+1}_act: {act} turn{i+1}_emotion: {emotion}"
-    
-    input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to(device)
+def collate_fn(batch):
+    input_ids = torch.nn.utils.rnn.pad_sequence([item['input_ids'] for item in batch], batch_first=True, padding_value=tokenizer.pad_token_id)
+    attention_mask = torch.nn.utils.rnn.pad_sequence([item['attention_mask'] for item in batch], batch_first=True, padding_value=0)
+    token_type_ids = torch.nn.utils.rnn.pad_sequence([item['token_type_ids'] for item in batch], batch_first=True, padding_value=0)
+    acts = torch.tensor([item['act'] for item in batch])
+    emotions = torch.tensor([item['emotion'] for item in batch])
+    return {'input_ids': input_ids, 'attention_mask': attention_mask, 'token_type_ids': token_type_ids, 'act': acts, 'emotion': emotions}
 
-    with torch.amp.autocast('cuda'):
-        output = model.generate(input_ids, max_length=50, num_return_sequences=1, no_repeat_ngram_size=2)
-    
-    return tokenizer.decode(output[0], skip_special_tokens=True)
+# Define the model
+class DialogueModel(nn.Module):
+    def __init__(self, num_acts: int, num_emotions: int):
+        super(DialogueModel, self).__init__()
+        self.bert = BertModel.from_pretrained('bert-base-uncased')
+        self.act_classifier = nn.Linear(self.bert.config.hidden_size, num_acts)
+        self.emotion_classifier = nn.Linear(self.bert.config.hidden_size, num_emotions)
 
-# 대화 테스트
-print("대화를 시작합니다. 'q'를 입력하면 종료됩니다.")
+    def forward(self, input_ids, attention_mask, token_type_ids):
+        outputs = self.bert(input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
+        cls_output = outputs.last_hidden_state[:, 0, :]  # CLS token
+        act_logits = self.act_classifier(cls_output)
+        emotion_logits = self.emotion_classifier(cls_output)
+        return act_logits, emotion_logits
 
-dialogue_history = []
-acts = []
-emotions = []
+def train_model(model, dataloader, optimizer, criterion, device):
+    model.train()
+    for batch in dataloader:
+        optimizer.zero_grad()
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        token_type_ids = batch['token_type_ids'].to(device)
+        act_labels = batch['act'].to(device)
+        emotion_labels = batch['emotion'].to(device)
 
-while True:
-    user_input = input("You: ")
-    if user_input.lower() == 'q':
-        break
+        act_logits, emotion_logits = model(input_ids, attention_mask, token_type_ids)
+        act_loss = criterion(act_logits, act_labels)
+        emotion_loss = criterion(emotion_logits, emotion_labels)
+        loss = act_loss + emotion_loss
 
-    dialogue_history.append(user_input)
-    acts.append(0)  # 임의의 act 값
-    emotions.append(0)  # 임의의 emotion 값
+        loss.backward()
+        optimizer.step()
 
-    response = generate_response(dialogue_history, acts, emotions)
-    print(f"Model: {response}")
+def evaluate_model(model, dataloader, criterion, device):
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            token_type_ids = batch['token_type_ids'].to(device)
+            act_labels = batch['act'].to(device)
+            emotion_labels = batch['emotion'].to(device)
 
-    dialogue_history.append(response)
-    acts.append(0)  # 임의의 act 값
-    emotions.append(0)  # 임의의 emotion 값
+            act_logits, emotion_logits = model(input_ids, attention_mask, token_type_ids)
+            act_loss = criterion(act_logits, act_labels)
+            emotion_loss = criterion(emotion_logits, emotion_labels)
+            loss = act_loss + emotion_loss
 
-print("대화가 종료되었습니다.")
+            total_loss += loss.item()
+    return total_loss / len(dataloader)
+
+if __name__ == "__main__":
+    # Load dataset
+    dataset = load_dataset("li2017dailydialog/daily_dialog")
+
+    # Tokenizer
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+    # Create Datasets
+    train_dataset = DialogueDataset(dataset['train']['dialog'], dataset['train']['act'], dataset['train']['emotion'], tokenizer)
+    val_dataset = DialogueDataset(dataset['validation']['dialog'], dataset['validation']['act'], dataset['validation']['emotion'], tokenizer)
+
+    # Data Loaders
+    train_dataloader = DataLoader(train_dataset, batch_size=16, shuffle=True, collate_fn=collate_fn)
+    val_dataloader = DataLoader(val_dataset, batch_size=16, collate_fn=collate_fn)
+
+    # Device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Model
+    model = DialogueModel(num_acts=5, num_emotions=7).to(device)
+
+    # Optimizer and Criterion
+    optimizer = optim.Adam(model.parameters(), lr=2e-5)
+    criterion = nn.CrossEntropyLoss()
+
+    # Training Loop
+    epochs = 3
+    for epoch in range(epochs):
+        train_model(model, train_dataloader, optimizer, criterion, device)
+        val_loss = evaluate_model(model, val_dataloader, criterion, device)
+        print(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {val_loss}")
+
+    # Save the model
+    torch.save(model.state_dict(), "dialogue_model.pt")
