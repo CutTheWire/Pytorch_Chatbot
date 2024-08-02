@@ -9,9 +9,5 @@ datasets
 matplotlib
 gitpython
 openpyxl
-<<<<<<< Updated upstream
-sentencepiece
-=======
 sentencepiece
 nltk
->>>>>>> Stashed changes

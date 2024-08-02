@@ -1,54 +1,4 @@
-# APT 설치 및 버전
-## CUDA
-
-- Version : 11.8
-- Download : [CUDA Toolkit 11.8 Downloads](https://developer.download.nvidia.com/compute/cuda/11.8.0/network_installers/cuda_11.8.0_windows_network.exe)
-
-## cuDNN
-
-- Version : 8.7.0
-- Download : [Local Installers for Windows](https://developer.nvidia.com/downloads/c118-cudnn-windows-8664-87084cuda11-archivezip)
-- cuDNN directory location
-    ```
-    C:\tools\cuda\
-    ```
-
-## Python
-
-- Version : 3.11.x
-- Download : [Python 3.11.4 - June 6, 2023](https://www.python.org/ftp/python/3.11.4/python-3.11.4-amd64.exe)
-
-## PyTorch
-
-- Run this Commandpip
-
-    ```
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-    ```
-
-## 환경 변수 설정
-
-| 변수 이름 | 변수 값 |
-| --- | --- |
-| CUDA_HOME | C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8 |
-
-| 변수 이름 | 변수 값 |
-| --- | --- |
-| CUDNN_HOME | C:\tools\cuda |
-
-| Set | | Path |
-| --- | --- | --- |
-|SET PATH |=|C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\bin;%PATH%|
-|SET PATH |=|C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\extras\CUPTI\lib64;%PATH%|
-|SET PATH |=|C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\include;%PATH%|
-|SET PATH |=|C:\tools\cuda\bin;%PATH%|
-
-아래는 WSL2를 설정하고 Microsoft Store에서 Ubuntu 24.04 LTS를 설치하여 GUI 환경을 구성하고 원격 데스크탑을 통해 연결하는 방법을 마크다운 형식으로 정리한 내용입니다.
-
-<br><br>
----
-
-# WSL2와 Ubuntu 24.04 LTS를 사용한 GUI 환경 구성 및 원격 데스크탑 연결
+# WSL2와 Ubuntu 22,04 LTS를 사용한 GUI 환경 구성 및 원격 데스크탑 연결
 
 
 ## 1. WSL2 설치 및 설정
@@ -66,7 +16,7 @@ wsl --install
 wsl --set-default-version 2
 ```
 
-## 2.2 Ubuntu 24.04 LTS 설치
+## 2.2 Ubuntu 22.04 LTS 설치
 Microsoft Store에서 Ubuntu 22.04 LTS를 검색하여 설치합니다.
 
 Microsoft Store url -> https://www.microsoft.com/store/productId/9PN20MSR04DW?ocid=pdpshare
@@ -99,8 +49,8 @@ Microsoft Store url -> https://www.microsoft.com/store/productId/9PN20MSR04DW?oc
   wsl
   ```
 
-### 3.1 `.wslconfig` 파일 수정
-`.wslconfig` 파일을 열어서 CPU 코어 수를 조정합니다. 예를 들어, 시스템에 총 20개의 코어가 있고 20%를 사용하고자 한다면, 4개의 코어를 할당하면 됩니다. 또한 사용중인 메모리에 맞춰 성능을 제한을 해주세요. (64GB 사용 중이므로 16GB 설정)
+### 3.1 `.wslconfig` 파일 수정 
+C:\Users\{user}\.wslconfig 파일을 열어서 CPU 코어 수를 조정합니다. 예를 들어, 시스템에 총 20개의 코어가 있고 20%를 사용하고자 한다면, 4개의 코어를 할당하면 됩니다. 또한 사용중인 메모리에 맞춰 성능을 제한을 해주세요. (64GB 사용 중이므로 16GB 설정)
 
 ```ini
 [wsl2]
@@ -139,13 +89,13 @@ Swap:             0B          0B          0B
 
 
 ---
-이제 WSL2와 Ubuntu 24.04 LTS를 사용하여 GUI 환경을 구성하고 원격 데스크탑을 통해 연결할 수 있습니다.
+이제 WSL2와 Ubuntu 22,04 LTS를 사용하여 GUI 환경을 구성하고 원격 데스크탑을 통해 연결할 수 있습니다.
 
-이 가이드를 따라하면 WSL2와 Ubuntu 24.04 LTS를 통해 GUI 환경을 구성하고 원격 데스크탑을 통해 연결할 수 있습니다. 문제가 발생할 경우 로그 파일을 확인하고 서비스 재시작을 시도해보세요. 
+이 가이드를 따라하면 WSL2와 Ubuntu 22,04 LTS를 통해 GUI 환경을 구성하고 원격 데스크탑을 통해 연결할 수 있습니다. 문제가 발생할 경우 로그 파일을 확인하고 서비스 재시작을 시도해보세요. 
 
 [Learn Microsoft - WSL으로 Linux GUI 앱 실행](https://learn.microsoft.com/ko-kr/windows/wsl/tutorials/gui-apps)
 
-[Microsoft Apps - Ubuntu 24.04 LTS - Windows에서 무료 다운로드 및 설치](https://apps.microsoft.com/detail/9nz3klhxdjp5?hl=ko-kr&gl=KR)
+[Microsoft Apps - Ubuntu 22,04 LTS - Windows에서 무료 다운로드 및 설치](https://apps.microsoft.com/detail/9nz3klhxdjp5?hl=ko-kr&gl=KR)
 
 [Learn Microsoft - 이전 버전 WSL의 수동 설치 단계](https://learn.microsoft.com/ko-kr/windows/wsl/install-manual) 
 
@@ -153,28 +103,17 @@ Swap:             0B          0B          0B
 
 ---
 
-# ubuntu 24.04 기준 cuda 설치
+# ubuntu 22,04 기준 cuda 설치
 
-## 1. NVIDIA CUDA 공식 설치 가이드 참고
-- NVIDIA에서 제공하는 [CUDA 설치 가이드](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html)를 참고하여 NVIDIA 저장소 키를 추가해 보겠습니다.
-- 우분투 22.04 LTS 환경에 맞는 키 링크는 다음과 같습니다:
-
-```bash
-sudo wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
-sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
-sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
-sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
-sudo apt update
-```
-
-## 2. CUDA 패키지 설치 문제 해결
+## 1. CUDA 패키지 설치 문제 해결
 - 저장소 키를 해결했다면, 이제 CUDA 패키지를 설치해 보세요:
 
 ```bash
 sudo apt update
-sudo apt install nvidia-cuda-toolkit
+sudo apt install nvidia-cuda-toolkit -y
 ```
-## 3. CUDA 확인
+## 2. CUDA 확인
+
 ### CUDA 버전 확인
 터미널에서 다음 명령어를 실행하여 설치된 CUDA 버전을 확인할 수 있습니다:
 ```bash
@@ -189,3 +128,18 @@ nvcc --version
 nvidia-smi
 ```
 이 명령어를 실행하면 GPU 정보와 현재 사용 상태가 출력됩니다.
+
+
+# python Batchfile 사용.
+
+## Ubuntu OS 
+### 1. venv 파일 구축
+  ```bash
+  source Batchfile/venv_setup.sh
+  ```
+### 2. Python .venv Interpreter 선택
+
+### 3. Python 라이브러리 설치
+  ```bash
+  source Batchfile/venv_install.sh
+  ```
